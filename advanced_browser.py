@@ -936,7 +936,7 @@ class P2PNetworkManager(QObject):
                 try:
                     self.listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     self.listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    self.listening_socket.bind(('127.0.0.1', port))  # Use localhost instead of 0.0.0.0
+                    self.listening_socket.bind(('0.0.0.0', port))  # Bind to all interfaces
                     self.listening_socket.listen(5)
                     self.port = port
                     self.is_listening = True
@@ -2139,39 +2139,56 @@ class Browser(QMainWindow):
         def add_peer_to_ui(username):
             if username in peer_widgets:
                 return
+            
+            # Check if the layout is still valid
+            try:
+                # Create peer item widget
+                peer_item = QWidget()
+                peer_item_layout = QHBoxLayout()
+                peer_item_layout.setContentsMargins(0, 5, 0, 5)
                 
-            peer_item = QWidget()
-            peer_item_layout = QHBoxLayout()
-            peer_item_layout.setContentsMargins(0, 5, 0, 5)
-            
-            # User status indicator
-            peer_status = QLabel("●")
-            peer_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
-            peer_item_layout.addWidget(peer_status)
-            
-            # Username
-            peer_label = QLabel(username)
-            peer_label.setStyleSheet("color: #FFFFFF;")
-            peer_item_layout.addWidget(peer_label)
-            
-            peer_item_layout.addStretch()
-            peer_item.setLayout(peer_item_layout)
-            users_layout.addWidget(peer_item)
-            
-            # Store widget reference
-            peer_widgets[username] = peer_item
-            
-            # Update user count
-            user_count.setText(f"{len(peer_widgets) + 1} users online")
+                # User status indicator
+                peer_status = QLabel("●")
+                peer_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
+                peer_item_layout.addWidget(peer_status)
+                
+                # Username
+                peer_label = QLabel(username)
+                peer_label.setStyleSheet("color: #FFFFFF;")
+                peer_item_layout.addWidget(peer_label)
+                
+                peer_item_layout.addStretch()
+                peer_item.setLayout(peer_item_layout)
+                
+                # Use QTimer.singleShot to add the widget to the layout in the main thread
+                # This helps avoid issues with the layout being deleted
+                def safe_add_widget():
+                    try:
+                        users_layout.addWidget(peer_item)
+                        # Store widget reference
+                        peer_widgets[username] = peer_item
+                        # Update user count
+                        user_count.setText(f"{len(peer_widgets) + 1} users online")
+                    except RuntimeError:
+                        print(f"Failed to add peer {username} to UI: layout has been deleted")
+                
+                QTimer.singleShot(0, safe_add_widget)
+            except Exception as e:
+                print(f"Error adding peer {username} to UI: {str(e)}")
         
         # Function to remove peer from UI
         def remove_peer_from_ui(username):
             if username in peer_widgets:
-                peer_widgets[username].setParent(None)
-                del peer_widgets[username]
-                
-                # Update user count
-                user_count.setText(f"{len(peer_widgets) + 1} users online")
+                try:
+                    peer_widgets[username].setParent(None)
+                    del peer_widgets[username]
+                    
+                    # Update user count
+                    user_count.setText(f"{len(peer_widgets) + 1} users online")
+                except RuntimeError:
+                    print(f"Failed to remove peer {username} from UI: widget has been deleted")
+                except Exception as e:
+                    print(f"Error removing peer {username} from UI: {str(e)}")
         
         # Connect to peer function
         def connect_to_peer():
@@ -2195,10 +2212,10 @@ class Browser(QMainWindow):
         connect_btn.clicked.connect(connect_to_peer)
         
         # Connect signals for peer management
-        self.p2p_manager.message_received.connect(add_peer_message)
-        self.p2p_manager.peer_connected.connect(add_peer_to_ui)
+        self.p2p_manager.message_received.connect(lambda username, msg: add_peer_message(username, msg))
+        self.p2p_manager.peer_connected.connect(lambda username: QTimer.singleShot(0, lambda: add_peer_to_ui(username)))
         self.p2p_manager.peer_connected.connect(lambda username: add_system_message(f"{username} has joined the chat"))
-        self.p2p_manager.peer_disconnected.connect(remove_peer_from_ui)
+        self.p2p_manager.peer_disconnected.connect(lambda username: QTimer.singleShot(0, lambda: remove_peer_from_ui(username)))
         self.p2p_manager.peer_disconnected.connect(lambda username: add_system_message(f"{username} has left the chat"))
         
         # Start listening for connections
